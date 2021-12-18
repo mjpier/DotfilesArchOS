@@ -1,0 +1,339 @@
+#!/bin/bash
+
+#Colocar el teclado en latino
+
+loadkeys la-latin1
+
+#Establecer password de root
+
+passwd
+
+#Iniciar SSH
+
+systemctl start sshd.service
+
+#Averiguar IP
+
+ip a 
+
+#Particionar disco
+# 01 particion de 512MB para EFI
+# 01 particion del resto de espacio para ROOT
+
+cfdisk /dev/sda 
+
+    sgdisk --zap-all /dev/sda
+    parted /dev/sda mklabel gpt
+    sgdisk /dev/sda -n=1:0:+512M -t=1:ef00
+    sgdisk /dev/sda -n=2:0:0
+
+#Encriptar particion ROOT
+
+cryptsetup luksFormat --perf-no_read_workqueue --perf-no_write_workqueue --type luks2 --cipher aes-xts-plain64 --key-size 512 --iter-time 2000 --pbkdf argon2id --hash sha3-512 /dev/sda2
+cryptsetup --allow-discards --perf-no_read_workqueue --perf-no_write_workqueue --persistent open /dev/sda2 crypt
+
+#Formatear particiones
+
+mkfs.vfat -F32 -n "EFI" /dev/sda1
+mkfs.btrfs -L Arch -f /dev/mapper/crypt
+
+#Crear y montar subvolumenes
+
+mount /dev/mapper/crypt /mnt
+btrfs sub create /mnt/@
+btrfs sub create /mnt/@home
+btrfs sub create /mnt/@abs
+btrfs sub create /mnt/@tmp
+btrfs sub create /mnt/@srv
+btrfs sub create /mnt/@snapshots
+btrfs sub create /mnt/@btrfs
+btrfs sub create /mnt/@log
+btrfs sub create /mnt/@cache
+umount /mnt
+
+mount -o noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@ /dev/mapper/crypt /mnt
+mkdir -p /mnt/{boot,home,var/cache,var/log,.snapshots,btrfs,var/tmp,var/abs,srv}
+mount -o noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@home /dev/mapper/crypt /mnt/home 
+mount -o nodev,nosuid,noexec,noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@abs /dev/mapper/crypt /mnt/var/abs
+mount -o nodev,nosuid,noexec,noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@tmp /dev/mapper/crypt /mnt/var/tmp
+mount -o noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@srv /dev/mapper/crypt /mnt/srv
+mount -o nodev,nosuid,noexec,noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@log /dev/mapper/crypt /mnt/var/log
+mount -o nodev,nosuid,noexec,noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@cache /dev/mapper/crypt /mnt/var/cache
+mount -o noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvol=@snapshots /dev/mapper/crypt /mnt/.snapshots
+mount -o noatime,compress-force=zstd,commit=120,space_cache=v2,ssd,discard=async,autodefrag,subvolid=5 /dev/mapper/crypt /mnt/btrfs
+
+#Desabilitar COW en maquinas virtuales
+
+mkdir -p /mnt/var/lib/{docker,machines}
+chattr +C /mnt/var/lib/{docker,machines}
+
+#Montar EFI
+
+mount -o nodev,nosuid,noexec /dev/sda1 /mnt/boot
+
+#Insatalar sistema base y generar fstab
+
+pacstrap /mnt base base-devel linux-lts linux-firmware linux-lts-headers intel-ucode mkinitcpio nano reflector python rsync zsh git btrfs-progs snapper sbsigntools apparmor exa bat fd ripgrep refind bc systemd-swap 
+
+genfstab -U /mnt > /mnt/etc/fstab
+
+#Configuracion del sistema
+
+timedatectl set-ntp true
+
+
+cp /etc/zsh/zprofile /mnt/root/.zprofile
+cp /etc/zsh/zshrc /mnt/root/.zshrc
+
+
+cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+
+
+arch-chroot /mnt /bin/zsh
+
+export USER=mjpier
+export HOST=archOS
+export TZ="America/Lima"
+
+
+passwd
+chsh -s /bin/zsh
+
+
+echo "es_PE.UTF-8 UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=\"es_PE.UTF-8\"" > /etc/locale.conf
+echo "KEYMAP=la-latin1" > /etc/vconsole.conf
+export LANG="es_PE.UTF-8"
+export LC_COLLATE="C"
+
+
+ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
+hwclock -uw
+
+
+echo $HOST > /etc/hostname
+
+
+useradd -m -G  docker,input,kvm,libvirt,storage,video,wheel -s /bin/zsh $USER
+passwd $USER
+#echo "$USER ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+echo "$USER ALL=(ALL) ALL" >> /etc/sudoers
+echo "Defaults timestamp_timeout=5" >> /etc/sudoers
+#sed -i "82c %wheel ALL=(ALL) NOPASSWD: ALL"  /mnt/etc/sudoers
+
+#CLONAR REPOSITORIO PARA TENER TODAS LAS CONFIGURACIONES
+#COPIAR EL HOSTS EN /etc/
+
+git clone https://github.com/mjpier/DotfilesArchOS
+
+cp -r hosts /etc
+
+
+#######################################################
+
+sed -i 's/BINARIES=()/BINARIES=("\/usr\/bin\/btrfs")/' /etc/mkinitcpio.conf
+sed -i 's/MODULES=()/MODULES=(i915)/' /etc/mkinitcpio.conf
+sed -i 's/#COMPRESSION="lz4"/COMPRESSION="lz4"/' /etc/mkinitcpio.conf
+sed -i 's/#COMPRESSION_OPTIONS=()/COMPRESSION_OPTIONS=(-9)/' /etc/mkinitcpio.conf
+sed -i 's/^HOOKS.*/HOOKS=(base systemd autodetect modconf block sd-encrypt filesystems keyboard fsck)/' /etc/mkinitcpio.conf
+
+mkinitcpio -p linux
+
+
+echo 'PRUNENAMES = ".snapshots"' >> /etc/updatedb.conf
+
+
+#ESTABLECER REFLECTOR UP
+#COPIAR REFLECTOR.CONF A /etc/xdg/reflector/reflector.conf
+
+
+
+mkdir /etc/pacman.d/hooks
+
+#COPIAR TODOS LOS .HOOKS HACIA /etc/pacman.d/hooks
+
+
+#COPIAR SWAP.CONF A /etc/systemd/
+
+
+
+#CONFIGURANDO PACMAN
+sed -i 's/#UseSyslog/UseSyslog/' /etc/pacman.conf
+sed -i 's/#Color/Color/g' /etc/pacman.conf
+sed -i 's/#TotalDownload/TotalDownload/g' /etc/pacman.conf
+sed -i 's/#VerbosePkgLists/VerbosePkgLists/g' /etc/pacman.conf
+
+sed -i "37i ILoveCandy" /etc/pacman.conf
+
+sed -i '93d' /etc/pacman.conf
+sed -i '94d' /etc/pacman.conf
+sed -i "93i [multilib]" /etc/pacman.conf
+sed -i "94i Include = /etc/pacman.d/mirrorlist" /etc/pacman.conf
+
+#NOOOOOOOOOOO COPIAR ZSHENV A /etc/zsh
+
+# Install AUR helper
+
+su $USER
+cd ~
+git clone https://aur.archlinux.org/paru-bin.git
+cd paru-bin
+makepkg -si --noconfirm
+cd ..
+sudo rm -rf paru-bin
+
+
+paru -S refind-btrfs otf-nerd-fonts-monacob-mono memavaild-git --noconfirm
+
+paru -S linux-xanmod-rt linux-xanmod-rt-headers --noconfirm
+
+export PATH=/usr/bin/ && paru -S nerd-fonts-jetbrains-mono
+
+
+#Sign bootloader & kernel for Secure Boot
+
+paru -S shim-signed --noconfirm
+sudo refind-install --shim /usr/share/shim-signed/shimx64.efi --localkeys
+sudo sbsign --key /etc/refind.d/keys/refind_local.key --cert /etc/refind.d/keys/refind_local.crt --output /boot/vmlinuz-linux /boot/vmlinuz-linux
+
+exit
+
+#Add rEFInd theme
+
+mkdir /boot/EFI/refind/themes
+git clone https://github.com/dheishman/refind-dreary.git /boot/EFI/refind/themes/refind-dreary-git
+mv /boot/EFI/refind/themes/refind-dreary-git/highres /boot/EFI/refind/themes/refind-dreary
+rm -dR /boot/EFI/refind/themes/refind-dreary-git
+
+
+#Configure rEFInd
+
+sed -i 's/#resolution 3/resolution 1920 1080/' /boot/EFI/refind/refind.conf
+sed -i 's/#use_graphics_for osx,linux/use_graphics_for linux/' /boot/EFI/refind/refind.conf
+sed -i 's/#scanfor internal,external,optical,manual/scanfor manual,external/' /boot/EFI/refind/refind.conf
+sed -i 's/^hideui.*/hideui singleuser,hints,arrows,badges/' /boot/EFI/refind/themes/refind-dreary/theme.conf
+
+
+
+#Add rEFInd Manual Stanza
+
+cat << EOF >> /boot/EFI/refind/refind.conf
+
+menuentry "Arch Linux" {
+    icon     /EFI/refind/themes/refind-dreary/icons/os_arch.png
+    volume   "Arch Linux"
+    loader   /vmlinuz-linux-lts
+    initrd   /initramfs-linux-lts.img
+    options  "rd.luks.name=$(blkid /dev/sda2 | cut -d " " -f2 | cut -d '=' -f2 | sed 's/\"//g')=crypt root=/dev/mapper/crypt rootflags=subvol=@ rw quiet nmi_watchdog=0 kernel.unprivileged_userns_clone=0 net.core.bpf_jit_harden=2 apparmor=1 lsm=lockdown,yama,apparmor systemd.unified_cgroup_hierarchy=1 add_efi_memmap initrd=\intel-ucode.img"
+    submenuentry "Boot - terminal" {
+        add_options "systemd.unit=multi-user.target"
+    }
+}
+
+menuentry "Arch Linux - Low Latency" {
+    icon     /EFI/refind/themes/refind-dreary/icons/os_arch.png
+    volume   "Arch Linux Xanmod"
+    loader   /vmlinuz-linux-xanmod-rt
+    initrd   /initramfs-linux-xanmod-rt.img
+    options  "rd.luks.name=$(blkid /dev/sda2 | cut -d " " -f2 | cut -d '=' -f2 | sed 's/\"//g')=crypt root=/dev/mapper/crypt rootflags=subvol=@ rw quiet nmi_watchdog=0 kernel.unprivileged_userns_clone=0 net.core.bpf_jit_harden=2 apparmor=1 lsm=lockdown,yama,apparmor systemd.unified_cgroup_hierarchy=1 add_efi_memmap initrd=\intel-ucode.img"
+    submenuentry "Boot - terminal" {
+        add_options "systemd.unit=multi-user.target"
+    }
+}
+
+include themes/refind-dreary/theme.conf
+EOF
+
+
+
+
+#Edit refing-btrfs
+
+sed -i 's/^count.*/count = "inf"/' /etc/refind-btrfs.conf
+sed -i 's/^include_sub_menus.*/include_sub_menus = true/' /etc/refind-btrfs.conf
+
+#Add snap-pac for automatic pre/post backups for package install/uninstalls/updates
+
+sudo pacman --noconfirm -S snap-pac
+
+#INSTALACION DE QEMU Y DOCKER PARA VIRTUALIZACIONES
+pacman -S docker libvirt qemu gnome-boxes --noconfirm
+
+#INSTALACION DE WIFI
+pacman -S dhcpcd networkmanager net-tools ifplugd --noconfirm
+
+#INSTALACION DE DRIVERS WIFI
+pacman -S wireless_tools wpa_supplicant wireless-regdb --noconfirm
+
+#INSTALACION DE DRIVERS BLUETOOTH
+pacman -S bluez bluez-utils --noconfirm
+
+#ACTIVAR SERVICIOS
+systemctl enable dhcpcd NetworkManager ntpd
+systemctl enable bluetooth.service
+
+echo "noipv6rs" >> /etc/dhcpcd.conf
+echo "noipv6" >> /etc/dhcpcd.conf
+
+
+#SHELL
+#pacman -S zsh-autosuggestions zsh-history-substring-search zsh-completions zsh-syntax-highlighting --noconfirm
+
+#INSTALACION DE SERVIDOR X
+pacman -S xorg-server xorg-apps xorg-xinit --noconfirm
+
+#UTILIDADES
+pacman -S neofetch p7zip unrar zip unzip gzip bzip2 pbzip2 lzop lzip zstd wget lsb-release xdg-user-dirs android-file-transfer android-tools android-udev libmtp libcddb gvfs gvfs-afc gvfs-smb gvfs-gphoto2 gvfs-mtp gvfs-goa gvfs-nfs dosfstools jfsutils f2fs-tools exfat-utils ntfs-3g reiserfsprogs xfsprogs nilfs-utils polkit gpart mtools ffmpeg aom libde265 x265 x264 libmpeg2 xvidcore libtheora libvpx schroedinger sdl gstreamer gst-plugins-bad gst-plugins-base gst-plugins-base-libs gst-plugins-good gst-plugins-ugly xine-lib lame youtube-dl firejail --noconfirm
+xdg-user-dirs-update
+
+#AUDIO
+pacman -S pipewire gst-plugin-pipewire pipewire-alsa pipewire-jack pipewire-media-session pipewire-pulse pipewire-zeroconf --noconfirm
+
+#FONTS (TIPOGRAFIAS)
+pacman -S ttf-dejavu ttf-liberation xorg-fonts-type1 ttf-bitstream-vera ttf-font-awesome gnu-free-fonts --noconfirm
+
+
+#CONFIGURAR TECLADO
+
+localectl --no-convert set-x11-keymap "la-latin1"
+      
+echo -e 'Section "InputClass"' > /etc/X11/xorg.conf.d/00-keyboard.conf
+echo -e 'Identifier "system-keyboard"' >> /etc/X11/xorg.conf.d/00-keyboard.conf
+echo -e 'MatchIsKeyboard "on"' >> /etc/X11/xorg.conf.d/00-keyboard.conf
+echo -e 'Option "XkbLayout" "latam"' >> /etc/X11/xorg.conf.d/00-keyboard.conf
+echo -e 'EndSection' >> /etc/X11/xorg.conf.d/00-keyboard.conf           
+
+
+
+pacman -S xf86-video-intel vulkan-intel mesa lib32-mesa intel-media-driver libva-intel-driver libva-vdpau-driver libvdpau-va-gl libva-utils vdpauinfo intel-compute-runtime clinfo ocl-icd lib32-ocl-icd opencl-headers --noconfirm --needed
+
+#DESMONTAR Y REINICIAR
+
+umount -R /mnt
+
+
+reboot
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
