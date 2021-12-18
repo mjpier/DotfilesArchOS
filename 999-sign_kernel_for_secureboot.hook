@@ -1,0 +1,21 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = linux
+Target = linux-lts
+Target = linux-hardened
+Target = linux-zen
+Target = linux-xanmod
+Target = linux-xanmod-cacule
+Target = linux-xanmod-git
+Target = linux-xanmod-lts
+Target = linux-xanmod-rt
+Target = linux-xanmod-anbox
+
+[Action]
+Description = Signing kernel with Machine Owner Key for Secure Boot
+When = PostTransaction
+Exec = /usr/bin/fd vmlinuz /boot -d 1 -x /usr/bin/sbsign --key /etc/refind.d/keys/refind_local.key --cert /etc/refind.d/keys/refind_local.crt --output {} {}
+Depends = sbsigntools
+Depends = fd
