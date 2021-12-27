@@ -177,7 +177,11 @@ umount -R /mnt
 
 reboot
 
-sudo xbps-install -S rofi make xsetroot imlib2-devel 
+sudo xbps-install -S rofi make xsetroot imlib2-devel dash 
+
+sudo xbps-install base-devel libX11-devel libXft-devel libXinerama-devel freetype-devel fontconfig-devel 
+
+
 
 xbps-install libXft-devel libX11-devel harfbuzz-devel libXext-devel libXrender-devel libXinerama-devel
 sudo xbps-install -S htop git xorg-minimal xorg-fonts xf86-input-libinput
