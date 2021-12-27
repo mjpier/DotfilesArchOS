@@ -186,7 +186,9 @@ sudo xbps-install base-devel libX11-devel libXft-devel libXinerama-devel freetyp
 xbps-install libXft-devel libX11-devel harfbuzz-devel libXext-devel libXrender-devel libXinerama-devel
 sudo xbps-install -S htop git xorg-minimal xorg-fonts xf86-input-libinput
 
-sudo xbps-install -S xterm neofetch picom feh xrdb dunst 
+sudo xbps-install -S xterm neofetch picom feh xrdb dunst mpd ncmpcpp terminus-font font-awesome
+ 
+ 
 
 
 
