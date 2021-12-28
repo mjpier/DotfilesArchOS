@@ -189,6 +189,8 @@ sudo xbps-install -S htop git xorg-minimal xorg-fonts xf86-input-libinput
 sudo xbps-install -S xterm neofetch picom feh xrdb dunst mpd ncmpcpp terminus-font font-awesome5 
 
 
+
+
  
  
 
